@@ -31,28 +31,32 @@ There are two ways to approach this problem, either we create/augment integrity-
 	- stitch the video feed, fill in the missing videos data with placeholder images.
 	- create consumable HLS playlist
 	- generate thumbnails
-	- take care of archivable + deletion policies
+	- take care of achievable + deletion policies
 	- Send further events so other services can take on the responsibilities
 - Requires the least changes on our current infrastructure while having the modularity to add more features on top of it. 
 
-For now, we'll focus on the 2nd approach more in this document, if we want to go with 1st approach, not much will change in the design and implementation docs, SRS would act as a proxy for IES for the time being.
+In this document, we'll deep dive into approach 1 as we try to consolidate IES as a full fledged proctoring solution.
 # Architecture
-Lets deep dive in the new SRS flows -
+Proctoring service will be a standalone service responsible for all proctoring needs (session recording, running analysis etc) and hackerrank will act as one of its customers.
 
-We have three broad flows to engineer -
+For the very initial version of proctoring service, we'll be designing the following flows from perspective of HRW
+- **Onboarding Flow** - HRW will first register itself as a customer for Proctoring Service. This handoff will first include registering hackerrank as a customer for proctoring service. It'll issue an `api_key` 
+- **Lifecycle Flows** - Henceforth, HRW will be solely responsible for calling endpoints to initialize a proctoring session and ending a proctoring session and fetching results via API endpoints and proxying other necessary endpoints as well. 
+
+Now under product flows, We have three broad flows to engineer in our new proctoring service
 - **Session Recording**: We need backend to provide support for enabling screen recording on frontend side. 
 - **Session Processing**: We need to process the session recording (creating a playable link, extracting screenshots for ss analysis, creating thumbnails etc). This will also extend to webcam recordings.
 - **Session Playback**: We need to be able to playback the session while having support for the previous version of session recorder. 
 
 Every session will be represented by a unique `session_uuid` on the integrity events service. We'll need to create a new MYSQL DB on integrity-events-service for facilitating this and storing (product_type, product_id) mapping vs a unique `session_uuid`.
-## Storage
+## File Storage
 ```
 # RAW Files
-/proctor/ies/<session_uuid>/<asset_name>/raw/
+/proctor/ies/<tenant_uuid>/<session_uuid>/<asset_name>/raw/
 	- [Individual webM chunks]
 
 # Processed Files
-/proctor/ies/<session_uuid>/<asset_name>/processed/
+/proctor/ies/<tenant_uuid>/<session_uuid>/<asset_name>/processed/
 	- hls_playlist
 	 ├── master.m3u8
 	 ├── index_360p.m3u8
@@ -65,8 +69,56 @@ Every session will be represented by a unique `session_uuid` on the integrity ev
 	- frame_thumbnails
 	- stitched_video
 	- playlist_cache
+	  
+# Reports
+/proctor/ies/<tenant_uuid>/<session_uuid>/reports/
+	- screenshot_analysis/
+	- webcam_analysis/
+	- audio_analysis/
 ```
 
+## MySQL Storage
+```sql
+-- Tenants Table
+CREATE TABLE tenants (
+    uuid CHAR(36) PRIMARY KEY,
+    slug VARCHAR(255) NOT NULL UNIQUE,
+    name VARCHAR(255) NOT NULL,
+    status ENUM('active', 'inactive', 'suspended') DEFAULT 'active',
+    config JSON,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_tenants_slug (slug)
+)
+
+-- Sessions Table
+CREATE TABLE sessions (
+    uuid CHAR(36) PRIMARY KEY,
+    tenant_uuid CHAR(36) NOT NULL,
+    unique_identifier VARCHAR(255) NOT NULL,
+    session_metadata JSON, -- holds ip, agent, location, etc.
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_uuid) REFERENCES tenants(uuid) ON DELETE CASCADE,
+    UNIQUE KEY uniq_tenant_identifier (tenant_uuid, unique_identifier),
+)
+
+-- API Keys Table
+CREATE TABLE api_keys (
+    uuid CHAR(36) PRIMARY KEY,
+    tenant_uuid CHAR(36) NOT NULL,
+    key_hash CHAR(64) NOT NULL UNIQUE,
+    label VARCHAR(255),
+    scopes JSON,
+    last_used_at DATETIME NULL,
+    expires_at DATETIME NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (tenant_uuid) REFERENCES tenants(uuid) ON DELETE CASCADE,
+    INDEX idx_api_keys_tenant_uuid (tenant_uuid)
+)
+```
 
 Let's deep dive into the individual layers 
 ### Session Recording
@@ -74,9 +126,7 @@ Let's deep dive into the individual layers
 
 ### Processing
 - We'll utilize a single SQS queue to trigger backend processing of the session.
-- Proctoring is serially dependent on completion of SRS service results (frames of screenshare stream or webcam stream or finalized audio from webcam stream), hence it makes sense to have the first layer as SQS instead of kafka
 - For initial version, we dont need a kafka or event bus as we'll only be storing the raw videos and not doing any significant post processing on this.
-- We'll be having a fleet of consumers that will be listening to Kafka for processing different events in parallel.
 
 ![[Integrity Session Processing]]
 
@@ -85,67 +135,58 @@ Let's deep dive into the individual layers
 
 # Backend Contracts
 
-## Session Replay Service
-Currently, we have a misplaced URL mapping of events and session (should be reversed). We should either create the new APIs for these in the same v1 group or create new urls in v2 group with updated resource mapping.
+## Integrity Events Service
+We'll be creating new session entries
 
-### 1. POST /srs/api/v1/events/session
-Creates a session on service side.  
-Supports two replay versions: 
-- dom_record 
-- full_screen_record
+### 1. POST /ies/api/v2/session
+Creates a session on service side. These APIs will be called from HRW
 #### Payload
 ```json
+// HEADERS
+// X-API-TOKEN: <api_key>
+
 {
-	product_type: <string>,
-	product_id: <int>,
-	replay_version: <enum> // dom_record, full_screen_record
+	unique_identifier: <string>, // unique identifier per tenant
+	session_metadata: <json>,
 }
 ```
 #### Response
 ```json
 {
-	session_id: <uuid>,
-	replay_version: <enum> // dom_record, full_screen_record
+	session_id: <uuid>
 }
 ```
 
-### 2. GET /srs/api/v1/events/session
-Returns the session metadata required by the player, Will also return the version of player that should be used for playback. Response will differ basis the version used. Supports fetch by both (session_id) and (product_type, product_id)
+### 2. GET /ies/api/v2/session
+Returns the session details
 #### Payload
 ```json
+// HEADERS
+// X-API-TOKEN: <api_key>
 {
-	session_id: <uuid?>,
-	product_type: <string?>,
-	product_id: <string?>
+	success: <bool>,
+	session_id: <uuid>
 }
 ```
 #### Response
-This will be varied basis the version of the recorder.
 ```json
-// for dom_record
 {
-	version: "dom_record",
-	first_event_timestamp: <timestamp>,
-	last_event_timestamp: <timestamp>,
-	metadata: [<MeatdataObject>],
-}
-
-// for full_screen_record
-{
-	version: "full_screen_record",
-	playback_url: <string>,
-	playback_type: <enum> // fullvideo, hls_masterplaylist
+	success: <bool>,
+	playback: {
+		url: <string>,
+		type: <enum> // fullvideo, hls_masterplaylist
+	}
 }
 ```
 
-### 3. GET /srs/api/v1/events/session/presigned-policy
+### 3. GET /ies/api/v2/session/presigned-policy
 Returns the signed policy for facilitating frontend s3 upload. Supports fetch by both (session_id) and (product_type, product_id)
 #### Payload
 ```json
+// HEADERS
+// X-API-TOKEN: <api_key>
 {
-	session_id: <uuid?>,
-	product_type: <string?>,
-	product_id: <string?>
+	session_id: <uuid>
 }
 ```
 #### Response
@@ -166,14 +207,14 @@ Returns the signed policy for facilitating frontend s3 upload. Supports fetch by
 }
 ```
 
-### 4. POST /srs/api/v1/events/session/playback
-Starts processing of the session playback 
+### 4. POST /ies/api/v2/session/process
+Starts processing of the session 
 #### Payload
 ```json
+// HEADERS
+// X-API-TOKEN: <api_key>
 {
-	session_id: <uuid?>,
-	product_type: <string?>,
-	product_id: <string?>
+	session_id: <uuid>
 }
 ```
 #### Response
@@ -183,16 +224,7 @@ Starts processing of the session playback
 - This consumer will listen to the SQS and do simple post-processing of the video.
 - This consumer is also responsible for creating the HLS playlist. Since, for now, we'll be doing this post the test is ended, this consumer can only do HLS playlist generation. 
 - For screen-recordings that are missing chunks, we’ll replace them with a placeholder segment video (black screen) to not break continuity.
-- 
 ## Technical Considerations
 
 - We need to sync the user’s clock with server clock as part of system check screens. We saw one ticket wrt user setting his clock something else from standard internet time. This can mess up screen-recording timestamps if user changes his clock midway during the test.
 - If we want to be able to read in almost realtime for integrity events analysis, we’ll have to ensure the videos we upload to s3 are self contained webm files. If we upload the continuous streams, we can only playback the video once the attempt has ended or we’ll have to continuously keep replaying the video stream from the beginning.
-
-
-
-# Reviews
-- [ ] Integrity Service as whole should be pursued instead of having different services
-- [ ] session_uuid should be primary key
-
-
