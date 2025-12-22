@@ -52,11 +52,11 @@ Every session will be represented by a unique `session_uuid` on the integrity ev
 ## File Storage
 ```
 # RAW Files
-/proctor/ies/<tenant_uuid>/<session_uuid>/<asset_name>/raw/
+/proctor/ies/<tenant_uuid>/<session_uuid>/raw/<asset_name>/
 	- [Individual webM chunks]
 
 # Processed Files
-/proctor/ies/<tenant_uuid>/<session_uuid>/<asset_name>/processed/
+/proctor/ies/<tenant_uuid>/<session_uuid>/processed/<asset_name>/
 	- hls_playlist
 	 ├── master.m3u8
 	 ├── index_360p.m3u8
@@ -79,7 +79,7 @@ Every session will be represented by a unique `session_uuid` on the integrity ev
 
 ## MySQL Storage
 ```sql
--- Tenants Table
+-- Tenants Table (Not going with session)
 CREATE TABLE tenants (
     uuid CHAR(36) PRIMARY KEY,
     slug VARCHAR(255) NOT NULL UNIQUE,
@@ -97,11 +97,28 @@ CREATE TABLE sessions (
     tenant_uuid CHAR(36) NOT NULL,
     unique_identifier VARCHAR(255) NOT NULL,
     session_metadata JSON, -- holds ip, agent, location, etc.
+    status ENUM ('created', 'processing', 'processed', 'failed')
+	config JSON
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (tenant_uuid) REFERENCES tenants(uuid) ON DELETE CASCADE,
     UNIQUE KEY uniq_tenant_identifier (tenant_uuid, unique_identifier),
 )
+
+--- Tasks for individual proctor workers
+CREATE TABLE session_proctoring_tasks {
+	uuid CHAR(36) PRIMARY KEY,
+	session_uuid CHAR(36) NOT NULL,
+	
+	task_type ENUM('session_replay', 'screenshot_analysis', 'webcam_analysis'),
+	task_status ENUM ('started', 'processed', 'failed', 'pending'),
+	task_result JSON, --- error, success etc
+	
+	created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+	
+	FOREIGN KEY (session_uuid) REFERENCES sessions(uuid) ON DELETE CASCADE,
+}
 
 -- API Keys Table
 CREATE TABLE api_keys (
@@ -164,7 +181,6 @@ Returns the session details
 // HEADERS
 // X-API-TOKEN: <api_key>
 {
-	success: <bool>,
 	session_id: <uuid>
 }
 ```
@@ -174,6 +190,8 @@ Returns the session details
 	success: <bool>,
 	playback: {
 		url: <string>,
+		start_time: <str>.
+		end_time: <str,>
 		type: <enum> // fullvideo, hls_masterplaylist
 	}
 }
@@ -186,7 +204,7 @@ Returns the signed policy for facilitating frontend s3 upload. Supports fetch by
 // HEADERS
 // X-API-TOKEN: <api_key>
 {
-	session_id: <uuid>
+	session_id: <uuid>,
 }
 ```
 #### Response
@@ -195,7 +213,7 @@ Returns the signed policy for facilitating frontend s3 upload. Supports fetch by
 	"postFields": {
 		"Content-Type": "image/jpg",
 		"acl": "private",
-		"key":"proctor/screenshare_stream/screen_attempt/test1280x720/raw/",
+		"key":"proctor/screenshare_stream/screen_attempt/raw/",
 		"policy": "eyJjb2..",
 		"x-amz-algorithm": "AWS4-HMAC-SHA256",
 		"x-amz-credential": "ASIAY/20251117/us-east-1/s3/aws4_request",
@@ -222,7 +240,7 @@ Starts processing of the session
 
 ### SRS SQS Consumer
 - This consumer will listen to the SQS and do simple post-processing of the video.
-- This consumer is also responsible for creating the HLS playlist. Since, for now, we'll be doing this post the test is ended, this consumer can only do HLS playlist generation. 
+- This consumer is also responsible for creating the HLS playlist. Since, for now, we'll be doing this post the test is ended, this consumer can only do HLS playlist generation.
 - For screen-recordings that are missing chunks, we’ll replace them with a placeholder segment video (black screen) to not break continuity.
 ## Technical Considerations
 

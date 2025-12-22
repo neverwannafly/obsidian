@@ -1,0 +1,1 @@
+Its a format for describing multimedia communication sessions. It contains details of what a peer can offer and what it can accept during a communication session. 
