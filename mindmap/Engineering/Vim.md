@@ -10,6 +10,7 @@ Vim has 4 modes
 - `a` - Go to insert mode and insert after the cursor.
 - `A` - Go to end of line and go to insert mode.
 - `w/b` - go forward word/backward by word
+- `I` - insert mode at the beginning of the line
 ## Basic VIM commands
 - `d` - delete`
 - `p` - paste
@@ -24,4 +25,6 @@ vim keysets can be composed by the following -
 - eg to delete 5 lines from current position to top, we can do `d5j`
 
 ## Vim horizontal Motions
-- 
+- `f + <char>` will lead to the space exactly at that character in left to right fashion. Capital F will do that in reverse
+- `t + <char>` will lead to the space one place behind that character in left to right fashion. Capital T will do that in reverse
+- `;` and `,` will cycle through the results on the same line 
