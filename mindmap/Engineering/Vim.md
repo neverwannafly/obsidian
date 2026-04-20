@@ -1,4 +1,4 @@
-## Vim Modes
+	## Vim Modes
 Vim has 4 modes
 - `normal mode` - Its for navigation and commands
 - `insert mode` - Its for typing text
