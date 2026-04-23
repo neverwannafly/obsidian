@@ -1,4 +1,4 @@
-## Features
+## features
 - [ ] Docker based deployments should be working
 - [ ] Docker compose based deployments should be working
 - [ ] Redis, MySQL compliant images need to be made available
@@ -14,6 +14,7 @@
 ## Bugs/Improvements
 - [ ] Separation of Function Service
       Have two versions of functions, one should be part of the `platform namespace` (which would be responsible for provisioning namespaces or anything else that needs admin priviledges) while another less priviledged function service should be running on a tenant specific usecase.
+- [ ] Functions should be container in container approach so its faster. right now we need builds for everything, but if a pod has simply diff docker builds for everything, and it spans them that will be better (the current memory allocation of functions is iffy, 16MiB instead of 64MiB)
 - [ ]  Deployment Edit + Redeploy functionality
       Deployments currently are not editable, also public/private visibility thing needs to be fixed. 
 - [ ] User Profile Page
@@ -24,3 +25,27 @@
 - [ ] Logs not working
 - [ ] username namespace management is pretty buggy (i need cap on the max characters there and also find some cool way to have a username - cant rely on emails just)
 - [ ] Function support for async executions and callback receiving on rails side
+- [ ] Deployments controller is super buggy (controllers should be slim)
+- [ ] openapi spec via rspecs
+- [ ] testing infrastructure/script ib k8s itself
+
+# State of Things
+
+## Account Creation
+- creates account using google/github/email-pass auth. 
+
+## Settings Page
+
+## Functions
+
+## Job Scheduler
+
+## Deployments
+### Docker Deployments
+
+### Frontend Deployments
+
+### Template Deployments
+
+## Misc
+### Unit Test Coverage

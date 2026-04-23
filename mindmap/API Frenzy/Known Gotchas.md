@@ -1,0 +1,1 @@
+- [ ] Currently, registry service's clusterIP is pinned to a static IP. There can be a chance that when we move to a different k8s provider, the allowed CIDR list will change rendering the service unable to be provisioned. A better more scalable approach is to have the registry service as a separate service hosted somewhere, maybe use clusterIP or just use nodeport :P
